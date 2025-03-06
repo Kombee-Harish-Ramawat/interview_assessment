@@ -1,0 +1,64 @@
+name: Flutter CI
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Get Flutter version from FVM or Flutter SDK
+        run: |
+          if [ -f ".flutter-version" ]; then
+            echo "Using FVM version"
+            FLUTTER_VERSION=$(cat .flutter-version)
+          else
+            echo "Using pubspec.yaml version"
+            FLUTTER_VERSION=$(grep 'flutter:' pubspec.yaml | awk '{print $2}' | tr -d '"')
+          fi
+          echo "Flutter version: $FLUTTER_VERSION"
+          echo "FLUTTER_VERSION=$FLUTTER_VERSION" >> $GITHUB_ENV
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+      - name: Install dependencies
+        run: flutter pub get
+      - name: Analyze code
+        run: flutter analyze || true
+      - name: Build APK
+        run: flutter build apk --release
+      - name: Verify APK File Exists
+        run: |
+          if [ ! -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+            echo ":x: APK file not found! Check build process."
+            exit 1
+          else
+            echo ":white_tick: APK found: build/app/outputs/flutter-apk/app-release.apk"
+          fi
+      - name: Install jq for JSON Parsing
+        run: sudo apt-get install jq -y
+      - name: Upload APK to Appetize.io
+        run: |
+          RESPONSE=$(curl -s -X POST "https://api.appetize.io/v1/apps" \
+            -H "Content-Type: multipart/form-data" \
+            -F "file=@build/app/outputs/flutter-apk/app-release.apk" \
+            -F "token=${{ secrets.API_TOKEN }}")
+          echo "Appetize.io Response: $RESPONSE"
+          APP_URL=$(echo $RESPONSE | jq -r '.publicURL')
+          if [ "$APP_URL" != "null" ] && [ -n "$APP_URL" ]; then
+            echo ":white_tick: Your app is available at: $APP_URL"
+            echo "APPETIZE_URL=$APP_URL" >> $GITHUB_ENV
+          else
+            echo ":x: Failed to upload APK to Appetize.io. Check API token and response."
+            exit 1
+          fi
+      - name: Display Appetize.io Link
+        run: echo ":link:Test your app here:${{ env.APPETIZE_URL }}"
